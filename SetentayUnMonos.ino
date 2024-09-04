@@ -103,6 +103,7 @@ Coordenadas calcularCoordenadasDesdeCentro(String comando) {
 }
 
 
+
 std::vector<Punto> bresenham(double x0, double y0, double x1, double y1) {
 	std::vector<Punto> puntos;
 	int dx = abs(x1 - x0);
@@ -139,38 +140,86 @@ void ajustarCoordenadas(Punto& punto, double& anguloActualHombro, double& angulo
 		return;
 	}
 
-	// Calcular los ángulos
-	double nuevoAnguloHombro = degrees(trig.AbsoluteAngle1) * -1;
-	double nuevoAnguloCodo = degrees(trig.RelativeAngle12);
+	// Calcular ambas soluciones
+	double anguloHombro1 = degrees(trig.AbsoluteAngle1) * -1;
+	double anguloCodo1 = degrees(trig.RelativeAngle12);
+
+	// Cambiar la configuración del codo y resolver de nuevo
+	trig.Target.X = punto.x;
+	trig.Target.Y = punto.y;
+	trig.SolveReverse(true); // true para la configuración del codo abajo
+
+	double anguloHombro2 = degrees(trig.AbsoluteAngle1) * -1;
+	double anguloCodo2 = degrees(trig.RelativeAngle12);
+
+	// Imprimir las soluciones calculadas
+	Serial.print("Solución 1 - Hombro: "); Serial.print(anguloHombro1); Serial.print(", Codo: "); Serial.println(anguloCodo1);
+	Serial.print("Solución 2 - Hombro: "); Serial.print(anguloHombro2); Serial.print(", Codo: "); Serial.println(anguloCodo2);
 
 	// Detectar cambios de cuadrante
 	bool cambioCuadranteX = (posicionActualX >= 0 && punto.x < 0) || (posicionActualX < 0 && punto.x >= 0);
 	bool cambioCuadranteY = (posicionActualY >= 0 && punto.y < 0) || (posicionActualY < 0 && punto.y >= 0);
 
+	// Ajustar los ángulos para evitar cambios bruscos si hay un cambio de cuadrante
 	if (cambioCuadranteX || cambioCuadranteY) {
-		// Ajustar los ángulos para evitar cambios bruscos
-		if (nuevoAnguloHombro > 0) {
-			nuevoAnguloHombro -= 360;
+		Serial.println("Cambio de cuadrante detectado.");
+
+		if (anguloHombro1 > 0) {
+			anguloHombro1 -= 360;
 		}
 		else {
-			nuevoAnguloHombro += 360;
+			anguloHombro1 += 360;
 		}
 
-		if (nuevoAnguloCodo > 0) {
-			nuevoAnguloCodo -= 360;
+		if (anguloCodo1 > 0) {
+			anguloCodo1 -= 360;
 		}
 		else {
-			nuevoAnguloCodo += 360;
+			anguloCodo1 += 360;
+		}
+
+		if (anguloHombro2 > 0) {
+			anguloHombro2 -= 360;
+		}
+		else {
+			anguloHombro2 += 360;
+		}
+
+		if (anguloCodo2 > 0) {
+			anguloCodo2 -= 360;
+		}
+		else {
+			anguloCodo2 += 360;
 		}
 	}
 
-	// Actualizar los ángulos actuales
-	anguloActualHombro = nuevoAnguloHombro;
-	anguloActualCodo = nuevoAnguloCodo;
+	// Calcular la diferencia entre las soluciones y la posición actual
+	double diferencia1 = abs(anguloHombro1 - anguloActualHombro) + abs(anguloCodo1 - anguloActualCodo);
+	double diferencia2 = abs(anguloHombro2 - anguloActualHombro) + abs(anguloCodo2 - anguloActualCodo);
+
+	// Imprimir las diferencias calculadas
+	Serial.print("Diferencia 1: "); Serial.println(diferencia1);
+	Serial.print("Diferencia 2: "); Serial.println(diferencia2);
+
+	// Elegir la solución más cercana a la posición actual
+	if (diferencia1 < diferencia2) {
+		anguloActualHombro = anguloHombro1;
+		anguloActualCodo = anguloCodo1;
+		Serial.println("Elegida Solución 1.");
+	}
+	else {
+		anguloActualHombro = anguloHombro2;
+		anguloActualCodo = anguloCodo2;
+		Serial.println("Elegida Solución 2.");
+	}
 
 	// Actualizar las coordenadas del punto
 	punto.x = trig.Target.X;
 	punto.y = trig.Target.Y;
+
+	// Imprimir los ángulos finales seleccionados
+	Serial.print("Ángulo Hombro Final: "); Serial.println(anguloActualHombro);
+	Serial.print("Ángulo Codo Final: "); Serial.println(anguloActualCodo);
 }
 
 void moverAPosicion(String comando) {
@@ -178,7 +227,7 @@ void moverAPosicion(String comando) {
 	int fila = comando[1] - '1';    // Fila [1-8]
 	Serial.print("Moviendo a la posicion "); Serial.print(comando); Serial.println("...");
 
-	// Convertir notaci�n de ajedrez a coordenadas en mm desde el centro del tablero
+	// Convertir notación de ajedrez a coordenadas en mm desde el centro del tablero
 	Coordenadas coord = calcularCoordenadasDesdeCentro(comando);
 	double x = coord.x;
 	double y = coord.y;
@@ -186,9 +235,13 @@ void moverAPosicion(String comando) {
 	// Generar puntos intermedios usando el algoritmo de Bresenham
 	std::vector<Punto> puntos = bresenham(posicionActualX, posicionActualY, x, y);
 
-	imprimirPuntos(puntos);
+	// Imprimir el contenido del vector puntos
+	Serial.println("Puntos generados por Bresenham:");
+	for (const auto& punto : puntos) {
+		Serial.print("Punto - X: "); Serial.print(punto.x); Serial.print(", Y: "); Serial.println(punto.y);
+	}
 
-	// Mover el efector a cada uno de los puntos intermedios
+	// Mover el efector a través de los puntos generados
 	for (auto& punto : puntos) {
 		// Ajustar las coordenadas para evitar cambios bruscos
 		ajustarCoordenadas(punto, anguloActualHombro, anguloActualCodo, posicionActualX, posicionActualY);
@@ -203,10 +256,12 @@ void moverAPosicion(String comando) {
 		posicionActualX = punto.x;
 		posicionActualY = punto.y;
 	}
-	// Actualizar la posici�n actual del efector
+
+	// Actualizar la posición actual del efector
 	posicionActualX = x;
 	posicionActualY = y;
 }
+
 
 double suavizarAngulo(double nuevoAngulo, double anguloActual) {
 	double diferencia = nuevoAngulo - anguloActual;
