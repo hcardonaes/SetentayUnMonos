@@ -5,9 +5,9 @@
 */
 
 #include <TMCStepper_UTILITY.h>
-#include <ArticulatedTriangle2D.h>
-#include <Point2D.h>
-#include <Point3D.h>
+//#include <ArticulatedTriangle2D.h>
+//#include <Point2D.h>
+//#include <Point3D.h>
 #include <TMCStepper.h>
 #include <ArduinoSTL.h>
 #include <Arduino.h>
@@ -15,6 +15,8 @@
 #include <MultiStepper.h>
 #include <vector>
 #include <queue>
+
+#include <math.h>
 
 struct Nodo {
 	int fila, columna;
@@ -58,12 +60,12 @@ void inicializarTablero() {
 	}
 }
 
-ArticulatedTriangle2D trig(100, 100, true);
+//ArticulatedTriangle2D trig(100, 100, true);
 
-constexpr auto L1 = 100.0; // Longitud del primer eslab�n (hombro) en mm
-constexpr auto L2 = 100.0; // Longitud del segundo eslab�n (codo) en mm
+const double L1 = 100.0; // Longitud del primer segmento
+const double L2 = 100.0; // Longitud del segundo segmento
 
-// Configuraci�n del motor del hombro (NEMA17 con TMC2209)
+// Configuración del motor del hombro (NEMA17 con TMC2209)
 constexpr auto STEP_PIN = 6;
 constexpr auto DIR_PIN = 3;
 constexpr auto ENABLE_PIN = 51;
@@ -71,7 +73,7 @@ constexpr auto R_SENSE = 0.11f;      // R_SENSE para c�lculo de corriente
 constexpr auto DRIVER_ADDRESS = 0b00;       // Direcci�n del driver TMC2209 seg�n MS1 y MS2
 #define SERIAL_PORT Serial3
 
-// Configuraci�n del motor del codo (24BYJ48 con ULN2003)
+// Configuración del motor del codo (24BYJ48 con ULN2003)
 constexpr auto HALFSTEP = 8;
 constexpr auto motorPin1 = 8;     // IN1 on ULN2003 ==> Blue   on 28BYJ-48
 constexpr auto motorPin2 = 9;     // IN2 on ULN2004 ==> Pink   on 28BYJ-48
@@ -102,8 +104,6 @@ Coordenadas calcularCoordenadasDesdeCentro(String comando) {
 	return { x, y };
 }
 
-
-
 std::vector<Punto> bresenham(double x0, double y0, double x1, double y1) {
 	std::vector<Punto> puntos;
 	int dx = abs(x1 - x0);
@@ -127,71 +127,49 @@ std::vector<Punto> bresenham(double x0, double y0, double x1, double y1) {
 	}
 	return puntos;
 }
+//.............................
+void resolverCinematicaInversa(Punto punto, double& anguloHombro1, double& anguloCodo1, double& anguloHombro2, double& anguloCodo2) {
+	double x = punto.x;
+	double y = punto.y;
 
-void ajustarCoordenadas(Punto& punto, double& anguloActualHombro, double& anguloActualCodo, double posicionActualX, double posicionActualY) {
-	// Resolver la cinemática inversa para obtener los ángulos
-	trig.Target.X = punto.x;
-	trig.Target.Y = punto.y;
-	trig.SolveReverse();
+	// Calcular la distancia desde el origen hasta el punto objetivo
+	double distancia = sqrt(x * x + y * y);
 
-	// Verificar si los ángulos son válidos
-	if (isnan(trig.AbsoluteAngle1) || isnan(trig.AbsoluteAngle2)) {
-		Serial.println("Error: No se pudo calcular los ángulos para la posición objetivo.");
+	// Verificar si el punto está al alcance del brazo
+	if (distancia > (L1 + L2) || distancia < fabs(L1 - L2)) {
+		Serial.println("Error: El punto está fuera del alcance del brazo.");
 		return;
 	}
 
-	// Calcular ambas soluciones
-	double anguloHombro1 = degrees(trig.AbsoluteAngle1) * -1;
-	double anguloCodo1 = degrees(trig.RelativeAngle12);
+	// Calcular el ángulo del hombro para ambas configuraciones
+	double cosTheta2 = (x * x + y * y - L1 * L1 - L2 * L2) / (2 * L1 * L2);
+	double sinTheta2 = sqrt(1 - cosTheta2 * cosTheta2);
 
-	// Cambiar la configuración del codo y resolver de nuevo
-	trig.Target.X = punto.x;
-	trig.Target.Y = punto.y;
-	trig.SolveReverse(true); // true para la configuración del codo abajo
+	// Configuración del codo arriba
+	anguloCodo1 = atan2(sinTheta2, cosTheta2);
+	anguloHombro1 = atan2(y, x) - atan2(L2 * sinTheta2, L1 + L2 * cosTheta2);
 
-	double anguloHombro2 = degrees(trig.AbsoluteAngle1) * -1;
-	double anguloCodo2 = degrees(trig.RelativeAngle12);
+	// Configuración del codo abajo
+	anguloCodo2 = atan2(-sinTheta2, cosTheta2);
+	anguloHombro2 = atan2(y, x) - atan2(L2 * -sinTheta2, L1 + L2 * cosTheta2);
+
+	// Convertir los ángulos a grados
+	anguloHombro1 = degrees(anguloHombro1);
+	anguloCodo1 = degrees(anguloCodo1);
+	anguloHombro2 = degrees(anguloHombro2);
+	anguloCodo2 = degrees(anguloCodo2);
+}
+
+
+void ajustarCoordenadas(Punto& punto, double& anguloActualHombro, double& anguloActualCodo, double posicionActualX, double posicionActualY) {
+	double anguloHombro1, anguloCodo1, anguloHombro2, anguloCodo2;
+
+	// Resolver la cinemática inversa para obtener los ángulos
+	resolverCinematicaInversa(punto, anguloHombro1, anguloCodo1, anguloHombro2, anguloCodo2);
 
 	// Imprimir las soluciones calculadas
 	Serial.print("Solución 1 - Hombro: "); Serial.print(anguloHombro1); Serial.print(", Codo: "); Serial.println(anguloCodo1);
 	Serial.print("Solución 2 - Hombro: "); Serial.print(anguloHombro2); Serial.print(", Codo: "); Serial.println(anguloCodo2);
-
-	// Detectar cambios de cuadrante
-	bool cambioCuadranteX = (posicionActualX >= 0 && punto.x < 0) || (posicionActualX < 0 && punto.x >= 0);
-	bool cambioCuadranteY = (posicionActualY >= 0 && punto.y < 0) || (posicionActualY < 0 && punto.y >= 0);
-
-	// Ajustar los ángulos para evitar cambios bruscos si hay un cambio de cuadrante
-	if (cambioCuadranteX || cambioCuadranteY) {
-		Serial.println("Cambio de cuadrante detectado.");
-
-		if (anguloHombro1 > 0) {
-			anguloHombro1 -= 360;
-		}
-		else {
-			anguloHombro1 += 360;
-		}
-
-		if (anguloCodo1 > 0) {
-			anguloCodo1 -= 360;
-		}
-		else {
-			anguloCodo1 += 360;
-		}
-
-		if (anguloHombro2 > 0) {
-			anguloHombro2 -= 360;
-		}
-		else {
-			anguloHombro2 += 360;
-		}
-
-		if (anguloCodo2 > 0) {
-			anguloCodo2 -= 360;
-		}
-		else {
-			anguloCodo2 += 360;
-		}
-	}
 
 	// Calcular la diferencia entre las soluciones y la posición actual
 	double diferencia1 = abs(anguloHombro1 - anguloActualHombro) + abs(anguloCodo1 - anguloActualCodo);
@@ -203,24 +181,25 @@ void ajustarCoordenadas(Punto& punto, double& anguloActualHombro, double& angulo
 
 	// Elegir la solución más cercana a la posición actual
 	if (diferencia1 < diferencia2) {
-		anguloActualHombro = anguloHombro1;
+		anguloActualHombro = -anguloHombro1; // Invertir el signo
 		anguloActualCodo = anguloCodo1;
 		Serial.println("Elegida Solución 1.");
 	}
 	else {
-		anguloActualHombro = anguloHombro2;
+		anguloActualHombro = -anguloHombro2; // Invertir el signo
 		anguloActualCodo = anguloCodo2;
 		Serial.println("Elegida Solución 2.");
 	}
 
 	// Actualizar las coordenadas del punto
-	punto.x = trig.Target.X;
-	punto.y = trig.Target.Y;
+	punto.x = posicionActualX;
+	punto.y = posicionActualY;
 
 	// Imprimir los ángulos finales seleccionados
 	Serial.print("Ángulo Hombro Final: "); Serial.println(anguloActualHombro);
 	Serial.print("Ángulo Codo Final: "); Serial.println(anguloActualCodo);
 }
+
 
 void moverAPosicion(String comando) {
 	int columna = comando[0] - 'a'; // Columna [a-h]
@@ -247,9 +226,6 @@ void moverAPosicion(String comando) {
 		ajustarCoordenadas(punto, anguloActualHombro, anguloActualCodo, posicionActualX, posicionActualY);
 
 		// Mover los motores a la posición ajustada
-		trig.Target.X = punto.x;
-		trig.Target.Y = punto.y;
-		trig.SolveReverse();
 		moverMotores();
 
 		// Actualizar la posición actual del efector
@@ -261,6 +237,9 @@ void moverAPosicion(String comando) {
 	posicionActualX = x;
 	posicionActualY = y;
 }
+//.............................
+
+
 
 
 double suavizarAngulo(double nuevoAngulo, double anguloActual) {
@@ -277,8 +256,8 @@ double suavizarAngulo(double nuevoAngulo, double anguloActual) {
 void realizarHoming() {
 	Serial.println("Realizando homing para los motores...");
 	// Homing para el codo
-	bool estadoLeva = digitalRead(LEVA_CODO_PIN);
-	if (estadoLeva == LOW) {
+	bool estadoLevaCodo = digitalRead(LEVA_CODO_PIN);
+	if (estadoLevaCodo == LOW) {
 		// Mover el motor hasta que se active el fin de carrera
 		codo.setSpeed(-800);
 		while (digitalRead(LEVA_CODO_PIN) == LOW) {
@@ -294,26 +273,26 @@ void realizarHoming() {
 	codo.setCurrentPosition(0); // Establece la posici�n actual transitoria como cero
 
 	// Homing para el hombro
-	estadoLeva = digitalRead(LEVA_HOMBRO_PIN);
-	Serial.print("Estado leva hombro: "); Serial.println(estadoLeva);
-	bool levaInicial = estadoLeva;
-	if (estadoLeva == LOW) {
+	bool estadoLevaHombro = digitalRead(LEVA_HOMBRO_PIN);
+	Serial.print("Estado leva hombro: "); Serial.println(estadoLevaHombro);
+	bool levaInicial = estadoLevaHombro;
+	if (estadoLevaHombro == LOW) {
 		// Mover el motor hasta que se active el fin de carrera
-		hombro.setSpeed(-800);
+		hombro.setSpeed(800);
 		while (digitalRead(LEVA_HOMBRO_PIN) == LOW) {
 			hombro.runSpeed();
 		}
 	}
 	else {
-		hombro.setSpeed(800);
+		hombro.setSpeed(-800);
 		while (digitalRead(LEVA_HOMBRO_PIN) == HIGH) {
 			hombro.runSpeed();
 		}
 	}
 	hombro.setCurrentPosition(0); // Establece la posici�n actual como cero
-
+	delay(2000);
 	// Mover los motores a la configuración de reposo inicial
-	pasosMotores[0] = 3940;   //3940  positivo = CCW
+	pasosMotores[0] = -4300;   //3940  positivo = CCW
 	pasosMotores[1] = -460;   //1575  positivo = CW
 	motores.moveTo(pasosMotores);
 	motores.runSpeedToPosition();
@@ -332,40 +311,32 @@ long calcularPasosHombro(double theta1) {
 
 long calcularPasosCodo(double theta2) {
 	double pasosPorGradoCodo = 3964 / 360;
-	long pasos = -theta2 * pasosPorGradoCodo;
+	long pasos = theta2 * pasosPorGradoCodo;
 	return pasos;
 }
 
 void moverMotores() {
-	// Verificar si la soluci�n es v�lida
-	if (isnan(trig.AbsoluteAngle1) || isnan(trig.AbsoluteAngle2)) {
-		Serial.println("Error: No se pudo calcular los �ngulos para la posici�n objetivo.");
+	// Verificar si la solución es válida
+	if (isnan(anguloActualHombro) || isnan(anguloActualCodo)) {
+		Serial.println("Error: No se pudo calcular los ángulos para la posición objetivo.");
 		return;
 	}
 
-	Angles angulos;
-	angulos.theta1 = (degrees(trig.AbsoluteAngle1) * -1);
-	angulos.theta2 = degrees(trig.RelativeAngle12);
-
-	//// Suavizar cambios bruscos en los �ngulos
-	//angulos.theta1 = suavizarAngulo(angulos.theta1, anguloActualHombro);
-	//angulos.theta2 = suavizarAngulo(angulos.theta2, anguloActualCodo);
-
-	Serial.print("Angulos: ("); Serial.print(angulos.theta1); Serial.print(", "); Serial.print(angulos.theta2); Serial.println(")");
-
-	// Convertir �ngulos a pasosMotores de motor (en pasos)
-	pasosMotores[0] = calcularPasosHombro(angulos.theta1);
-	pasosMotores[1] = calcularPasosCodo(angulos.theta2);
-	//Serial.print("Pasos: ("); Serial.print(pasosMotores[0]); Serial.print(", "); Serial.print(pasosMotores[1]); Serial.println(")");
-
-	// Mover los motores a las pasosMotores calculadas
+	// Convertir ángulos a pasos de motor (en pasos)
+	pasosMotores[0] = calcularPasosHombro(anguloActualHombro);
+	pasosMotores[1] = calcularPasosCodo(anguloActualCodo);
+	Serial.print("Pasos: ("); Serial.print(pasosMotores[0]); Serial.print(", "); Serial.print(pasosMotores[1]); Serial.println(")");
+	//pasosMotores[0] = pasosMotores[0];
+	// 
+	// Mover los motores a las posiciones calculadas
 	motores.moveTo(pasosMotores);
 	motores.runSpeedToPosition();
 
-	// Actualizar los �ngulos actuales
-	anguloActualHombro = angulos.theta1;
-	anguloActualCodo = angulos.theta2;
+	// Actualizar los ángulos actuales
+	Serial.print("Ángulo Hombro Actual: "); Serial.println(anguloActualHombro);
+	Serial.print("Ángulo Codo Actual: "); Serial.println(anguloActualCodo);
 }
+
 
 void recalcularFactores() {
 	// Variables para almacenar los pasos totales
@@ -414,12 +385,10 @@ void recalcularFactores() {
 
 void setup() {
 	Serial.begin(115200);
-	//inicializarTablero();
-	//colocarPieza('C', 0, 1); // Colocar un caballo en la posici�n inicial
 
-	SERIAL_PORT.begin(115200); // Configura la comunicaci�n con el TMC2209
+	SERIAL_PORT.begin(115200); // Configura la comunicación con el TMC2209
 
-	// Configuraci�n del driver TMC2209
+	// Configuración del driver TMC2209
 	pinMode(ENABLE_PIN, OUTPUT);
 	digitalWrite(ENABLE_PIN, LOW); // Habilitar el driver
 
@@ -431,39 +400,41 @@ void setup() {
 	driver.pwm_autoscale(true); // Activar auto scale PWM
 	driver.enn(); // Habilitar el driver
 
-	// Configuraci�n de los pines
+	// Configuración de los pines
 	pinMode(LEVA_HOMBRO_PIN, INPUT_PULLUP);
 	pinMode(LEVA_CODO_PIN, INPUT_PULLUP);
 
-	// Configuraci�n inicial de los motores
+	// Configuración inicial de los motores
 	hombro.setMaxSpeed(800);
 	hombro.setAcceleration(800);
 	codo.setMaxSpeed(800);
 	codo.setAcceleration(800);
 
-	// Add the motores to the MultiStepper object
-	motores.addStepper(hombro); // position '0'
-	motores.addStepper(codo);    // position '1'
+	// Añadir los motores al objeto MultiStepper
+	motores.addStepper(hombro); // posición '0'
+	motores.addStepper(codo);    // posición '1'
 
 	// Homing: Mueve los motores hasta posicionarse en el origen
 	Serial.println("Realizando homing...");
 	realizarHoming();
 	Serial.println("Homing completado.");
-	delay(2000);
+	delay(5000);
 
-	// Ajustar la posici�n inicial del efector al centro de la casilla d4
+	// Ajustar la posición inicial del efector al centro de la casilla d4
 	Coordenadas coordInicial = calcularCoordenadasDesdeCentro("d4");
-	Serial.print("Coordenadas iniciales: ("); Serial.print(coordInicial.x); Serial.print(", "); Serial.print(coordInicial.y); Serial.println("...");
-	posicionActualX = coordInicial.x;
-	posicionActualY = coordInicial.y;
+	Serial.print("Coordenadas iniciales: ("); Serial.print(coordInicial.x); Serial.print(", "); Serial.print(coordInicial.y); Serial.println(")");
+
+	//posicionActualX = coordInicial.x;
+	//posicionActualY = coordInicial.y;
+	posicionActualX = 0.0;
+	posicionActualY = 0.0;
 
 	// Mover el efector al centro de la casilla d4
-	trig.Target.X = posicionActualX;
-	trig.Target.Y = posicionActualY;
-	trig.SolveReverse();
+	Punto puntoInicial = { posicionActualX, posicionActualY };
+	ajustarCoordenadas(puntoInicial, anguloActualHombro, anguloActualCodo, posicionActualX, posicionActualY);
 	moverMotores();
 
-	// Espera comandos del usuario a trav�s del puerto serie
+	// Espera comandos del usuario a través del puerto serie
 	Serial.println("Homing completado. Listo para recibir comandos.");
 
 	codo.disableOutputs();
